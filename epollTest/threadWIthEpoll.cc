@@ -10,43 +10,83 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <vector>
+#include <memory>
+#include <map>
 
 using namespace std;
 
+class Connection;
+typedef shared_ptr<Connection> ConnectionPtr;
+
 class Acceptor;
+class Buffer
+{
+    public:
+    Buffer()
+    {
+        printf("Buffer here\n");
+    }
+};
+class EventLoop;
+
 class Event
 {
     public:
-    Event()
+    //注意此处的conn类型为指针
+    Event(int fd):_fd(fd)
     {
-
+        memset(&_event, 0 , sizeof(_event));
     }
-    int getFd(){return fd;}
-    epoll_event getEvents{return events;}
-    int setReadCallback(function<>);
-    int setWriteCallback(function<>);
-    private:
-    int fd;
-    epoll_event event;
+    int getFd(){return _fd;}
+    //EventLoop *getLoop(){return loopptr;}
+    epoll_event getEvents(){return _event;}
+    int setReadCallback(function<void(ConnectionPtr,Buffer)> f);
+    int setWriteCallback(function<void(ConnectionPtr,Buffer)> f)
+    {
+        
+    }
+    void setConn(ConnectionPtr conn)
+    {
+        _conn = conn;
+    }
+    void callRead(){readCallback();}
+    void callWrite(){writeCallback();}
+    void registerLoop(EventLoop *loopptr);
+    epoll_event _event;
+    //暂时为public
     function<void(void)> readCallback;
     function<void(void)> writeCallback;
-    EventLoop *loopptr;
+    private:
+    int _fd;
+    
+    ConnectionPtr _conn;
+    //Connection *_conn;
 };
+
+class Server;
+
 class EventLoop
 {
     public:
     /*事件循环行为都一致,事件回调不同,由用户自定义*/
-    EventLoop()
+    //有并发问题
+    EventLoop(Server *serv, string name):_serv(serv), _name(name)
     {
         epfd = epoll_create(100);
+        printf("Create epfd\n");
+    }
+    int start()
+    {
         int res = pthread_create(&pid, NULL, loop, &epfd);
+        return res;
     }
     static void *loop(void *arg);
 
     //TODO 异常
     int addFd(epoll_event ev, int fd)
     {
-        printf("Test %d\n", fd);
+        printf("Test in addFD() %d\n", fd);
         int res = epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
         if (res == -1)
         {
@@ -56,15 +96,50 @@ class EventLoop
         printf("Add Success\n");
         return res;
     }
+    Server *getServer(){return _serv;}
+    void runInLoop();
+    void doTask();
     /* int addFd(int *fd)
     {
         printf("Test %d\n", *fd);
         printf("Test pthread %u\n", pthread_self());
     }*/
     private:
+    string _name;
+    Server *_serv;
+    vector<function<void(void)> > _tasks;
     pthread_t pid;
     int epfd;
 };
+
+class Connection
+{
+    public:
+    Connection(int fd, EventLoop *loopptr):_fd(fd), _ev(fd), _loopptr(loopptr)
+    {
+    }
+
+    void send(string str)
+    {
+        printf("send");
+    }
+    void setConn(ConnectionPtr conn)
+    {
+        _ev.setConn(conn);
+    }
+    Event *getEv(){return &_ev;}
+    int getFd(){return _fd;}
+    //暂时
+    Buffer inputbuf;
+    Buffer outputbuf;
+    private:
+    EventLoop *_loopptr;
+    Event _ev;
+    int _fd;
+    
+};
+
+
 class Socket
 {
     public:
@@ -96,11 +171,58 @@ class Socket
     int fd;
 };
 
+class Server
+{
+    public:
+    Server(int num):_num(num), cur(0)
+    {
+        for (int i = 0; i < _num; i++)
+        {
+            char tmp[10] = {0};
+            sprintf(tmp, "%d", i);
+            string name = "thread" + string(tmp);
+            //Need free()
+            EventLoop *loop = new EventLoop(this, name);
+            printf("Test loop %s\n", name.c_str());
+            looplist[name] = loop;
+        }
+    }
+    map<string, EventLoop *> looplist;
+    map<string, ConnectionPtr> connlist;
+    int start()
+    {
+        auto it = looplist.begin();
+
+        while(it != looplist.end())
+        {
+            //it->first;
+            it->second->start();
+            it++;         
+        }
+    }
+    EventLoop *getNextLoop()
+    {
+    	char tmp[10] = {0};
+    	sprintf(tmp, "%d", cur);
+    	string name = "thread" + string(tmp);
+    	cur++;
+    	if (cur >= _num)
+    	{
+    		cur = 0;
+    	}
+    	return looplist[name];
+    }
+
+    private:
+    int _num;
+    int cur;
+};
+
 class Acceptor
 {
     public:
     /*回调,用于传入epoll后,事件发生时调用*/
-    Acceptor():listenSocket(Socket(8832, "null"))
+    Acceptor(Server *serv):listenSocket(Socket(8832, "null")), _serv(serv),ev(listenSocket.getFd())
     {
         int ret = listen(listenSocket.getFd(), 20);
         if(ret!=0)
@@ -116,63 +238,117 @@ class Acceptor
         struct sockaddr_in clientaddr;
         socklen_t len = sizeof(clientaddr);
         bzero(&clientaddr,sizeof(clientaddr));
-        accept(listenSocket.getFd(), (struct sockaddr *) &clientaddr, &len);
+        int connfd = accept(listenSocket.getFd(), (struct sockaddr *) &clientaddr, &len);
+        EventLoop *loop = _serv->getNextLoop();
+        ConnectionPtr connptr(new Connection(connfd, loop));
+        connptr->setConn(connptr);
+        char tmp[10] = {0};
+        sprintf(tmp, "conn%d", connfd);
+        string name(tmp);
+        printf("Test name : %s\n", tmp);
+        _serv->connlist[name] = connptr;
+        
+        if (readUserCallback)
+            connptr->getEv()->setReadCallback(readUserCallback);
+        if (writeUserCallback)
+            connptr->getEv()->setWriteCallback(writeUserCallback);
+
+        connptr->getEv()->registerLoop(loop);
         char ip[15] = {0};
         printf("%s 连接到服务器,端口号 %d\n",inet_ntop(AF_INET, &clientaddr.sin_addr, ip ,sizeof(ip)),ntohs(clientaddr.sin_port));
     }
     void registerLoop(EventLoop *loop)
     {
         //坑:union epoll_event的data.fd和data.ptr只能取其一
-        memset(&event, 0, sizeof(event));
-        event.events = EPOLLIN;
+        memset(&ev._event, 0, sizeof(ev._event));
+        ev._event.events = EPOLLIN;
         //event.data.fd = listenSocket.getFd();
         
         printf("Test pthread %u\n", pthread_self());
-        readCallback = bind(&Acceptor::logic, this);
-        event.data.ptr = this;
-        loop->addFd(event, listenSocket.getFd());
+        ev.readCallback = bind(&Acceptor::logic, this);
+        //event.data.ptr = this;
+        ev._event.data.ptr = &ev;
+        loop->addFd(ev._event, listenSocket.getFd());
         printf("Test %d\n", listenSocket.getFd());
-        //loop->addFd(event.data.fd);
     }
-    function<void(void)> readCallback;
+    //function<void(void)> readCallback;
+    int setUserReadCallback(function<void(ConnectionPtr,Buffer)> f)
+    {
+        readUserCallback = f;
+        return 1;
+    }
+    int setUserWriteCallback(function<void(ConnectionPtr,Buffer)> f)
+    {
+        writeUserCallback = f;
+        return 1;
+    }
+    function<void(ConnectionPtr,Buffer)> readUserCallback;
+    function<void(ConnectionPtr,Buffer)> writeUserCallback;
     private:
-    epoll_event event;
-    EventLoop *loopptr;
+    Event ev;
+    //epoll_event event;
+    //EventLoop *loopptr;
+    Server *_serv;
     Socket listenSocket;
 };
 
-    void *EventLoop::loop(void *arg)
+    int Event::setReadCallback(function<void(ConnectionPtr,Buffer)> f)
     {
-        printf("thread %u has begin\n", (int)pthread_self());
-        epoll_event events[100];
-        for (; ;)
+        readCallback = bind(f, _conn, _conn->inputbuf);
+    }
+
+    void Event::registerLoop(EventLoop *loopptr)
+    {
+        if (readCallback != nullptr)
         {
-            int nfds = epoll_wait(*((int*)arg), events, 100, -1);
-            for (int i = 0; i < nfds; i++)
+            _event.events |= EPOLLIN;
+        }
+        if (writeCallback != nullptr)
+        {
+            _event.events |= EPOLLOUT;
+        }
+        _event.data.ptr = this;
+        loopptr->addFd(_event, _fd);
+    }
+
+void *EventLoop::loop(void *arg)
+{
+    printf("thread %u has begin\n", (int)pthread_self());
+    //修改
+    epoll_event events[100];
+    for (; ;)
+    {
+        int nfds = epoll_wait(*((int*)arg), events, 188, -1);
+        printf("epoll_wait return nfds %d\n", nfds);
+        for (int i = 0; i < nfds; i++)
+        {
+            if (events[i].events & EPOLLIN)
             {
-                if (events[i].events & EPOLLIN)
-                {
-                    ((Acceptor *)events[i].data.ptr)->readCallback();
-                }
-                if (events[i].events & EPOLLOUT)
-                {
-                    events[i].data.ptr->writeCallback();
-                }
+                ((Event *)events[i].data.ptr)->readCallback();
+            }
+            if (events[i].events & EPOLLOUT)
+            {
+                ((Event *)events[i].data.ptr)->writeCallback();
             }
         }
-        return NULL;
     }
+    return NULL;
+}
+
+void callback(ConnectionPtr conn, Buffer buf)
+{
+    char tmp[10] = {0};
+    read(conn->getFd(), tmp, 10);
+    printf("Thread %u Recv from conn: %s\n",pthread_self(), tmp);
+}
 
 int main(void)
 {
-    EventLoop loop;
-    sleep(1);
-    Acceptor acc;
-    acc.registerLoop(&loop);
-    for (int i = 0;i < 4; i++)
-    {
-        EventLoop loop;
-    }
+    Server serv(4);
+    Acceptor acc(&serv);
+    acc.setUserReadCallback(bind(callback,placeholders::_1, placeholders::_2));
+    acc.registerLoop(serv.getNextLoop());
+    serv.start();
     while(1)
     {
 
