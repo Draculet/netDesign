@@ -96,6 +96,7 @@ class EventLoop
         printf("Add Success\n");
         return res;
     }
+ 
     Server *getServer(){return _serv;}
     void runInLoop();
     void doTask();
@@ -118,7 +119,10 @@ class Connection
     Connection(int fd, EventLoop *loopptr):_fd(fd), _ev(fd), _loopptr(loopptr)
     {
     }
-
+	~Connection()
+	{
+		printf("=====~Connection=====\n");
+	}
     void send(string str)
     {
         printf("send");
@@ -132,9 +136,10 @@ class Connection
     //暂时
     Buffer inputbuf;
     Buffer outputbuf;
+    Event _ev;
     private:
     EventLoop *_loopptr;
-    Event _ev;
+    
     int _fd;
     
 };
@@ -187,6 +192,19 @@ class Server
             looplist[name] = loop;
         }
     }
+    
+    void printPtrCount()
+    {
+    	auto it = connlist.begin();
+		printf("=====Use Count Test=====\n");
+        while(it != connlist.end())
+        {
+            //it->first;
+            printf("The use count of Conn %s is %d\n", it->first.c_str(), it->second.use_count());
+            it++;         
+        }
+    }
+    
     map<string, EventLoop *> looplist;
     map<string, ConnectionPtr> connlist;
     int start()
@@ -246,7 +264,12 @@ class Acceptor
         sprintf(tmp, "conn%d", connfd);
         string name(tmp);
         printf("Test name : %s\n", tmp);
+        
+        _serv->printPtrCount();
+        
         _serv->connlist[name] = connptr;
+        
+        _serv->printPtrCount();
         
         if (readUserCallback)
             connptr->getEv()->setReadCallback(readUserCallback);
@@ -294,7 +317,12 @@ class Acceptor
 
     int Event::setReadCallback(function<void(ConnectionPtr,Buffer)> f)
     {
+    	printf("=====Use Count Test=====\n");
+        printf("The use count is %d\n", _conn.use_count());
+        
         readCallback = bind(f, _conn, _conn->inputbuf);
+        
+        printf("The use count is %d\n", _conn.use_count());
     }
 
     void Event::registerLoop(EventLoop *loopptr)
@@ -324,7 +352,18 @@ void *EventLoop::loop(void *arg)
         {
             if (events[i].events & EPOLLIN)
             {
-                ((Event *)events[i].data.ptr)->readCallback();
+                //((Event *)events[i].data.ptr)->readCallback();
+               	//这个function包含shared_ptr指针对象,此处先复制一份再调用可以延长shared_ptr的生命周期,使得调用期间不会出现core dump,调用完成之后就会析构.
+                function<void(void)> func = ((Event *)events[i].data.ptr)->readCallback;
+                printf("sleep 2 sec\n");
+                sleep(2);
+                if (func != nullptr)
+                	func();
+                else
+                {
+                	printf("End\n");
+                	exit(-1);
+                }
             }
             if (events[i].events & EPOLLOUT)
             {
@@ -349,6 +388,20 @@ int main(void)
     acc.setUserReadCallback(bind(callback,placeholders::_1, placeholders::_2));
     acc.registerLoop(serv.getNextLoop());
     serv.start();
+    sleep(10);
+    
+    //此处的指针计数为3,除了connlist中的1之外，在存储回调函数的event类中还有2个对象使用到了指针.
+    ConnectionPtr *tmp = &serv.connlist.begin()->second;
+    //将event对象清除
+    (*tmp)->_ev = Event(-1);
+    //此时引用计数为1
+    //(*tmp)->_ev.readCallback = bind(callback, *tmp, Buffer());
+    printf("Ptr count %d\n", tmp->use_count());
+    //如果loop中没有复制function，那么计数在erase之后降为0,conn析构
+    //如果erase发生在复制之后，那么计数为1,在执行完函数func后，系数降为0,conn析构.
+    serv.connlist.erase(serv.connlist.begin());
+    printf("Ptr count %d\n", tmp->use_count());
+    //serv.printPtrCount();
     while(1)
     {
 

@@ -1,3 +1,5 @@
 * Eventloop demo基本完成
 * Buffer待补充
 * 修复代码
+
+* Acceptor和Connetor可加上newConnectionCallback，TcpServer和TcpClient中设置newConntionCallback, Acceptor/Connector在listen/connecting时设置监听fd enable reading/writing, 一旦可读/可写，回调handleRead()/handleWrite中调用newConnectionCallback(一般在connect和accept之后调用),然后在设置的newConnectionCallback中一般会设置connctionCallback, messageCallback,以及设置conn集合等，最后在所属线程调用connectEstablished(),这个函数又会调用connectionCallback

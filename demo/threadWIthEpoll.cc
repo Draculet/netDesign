@@ -349,8 +349,8 @@ void *EventLoop::loop(void *arg)
 
 void callback(ConnectionPtr conn, Buffer buf)
 {
-    char tmp[10] = {0};
-    read(conn->getFd(), tmp, 10);
+    char tmp[1000] = {0};
+    read(conn->getFd(), tmp, 1000);
     printf("Thread %u Recv from conn: %s\n",pthread_self(), tmp);
 }
 

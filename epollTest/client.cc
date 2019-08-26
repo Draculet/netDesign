@@ -19,14 +19,15 @@ pthread_cond_t  condition = PTHREAD_COND_INITIALIZER;
 
 int main(int argc, char** argv)
 {  
-	for (int i = 0; i < 1000; i++)
+	for (int i = 0; i < 30000; i++)
 	{
     	pthread_t pid;
     	pthread_create(&pid,NULL,&client_echo, NULL);
+    	printf("=");
     }
-    //pthread_mutex_lock(&mutex);
-    //pthread_cond_broadcast(&condition);
-    //pthread_mutex_unlock(&mutex);
+    pthread_mutex_lock(&mutex);
+    pthread_cond_broadcast(&condition);
+    pthread_mutex_unlock(&mutex);
     
     while(1)
     {
@@ -37,9 +38,10 @@ int main(int argc, char** argv)
 void *client_echo(void *)
 {
 	int count = 0;
-	//pthread_mutex_lock(&mutex);
-    //pthread_cond_wait(&condition, &mutex);
-    //pthread_mutex_unlock(&mutex);
+	pthread_mutex_lock(&mutex);
+    pthread_cond_wait(&condition, &mutex);
+    pthread_mutex_unlock(&mutex);
+
 	while (1)
 	{
 		int clientFd,ret;
@@ -63,7 +65,7 @@ void *client_echo(void *)
     	}
     	printf("count: %d\n", count);
     	count++;
-    	if (count >= 20)
+    	if (count >= 15)
     	{
     		printf("Reach the goal\n");
     		while(1)

@@ -1,0 +1,3 @@
+* 运用bind得到的function会将bind的参数复制一份,因此shared_ptr计数会增加1,而当调用时,function<ret (Type&)>和function<ret (Type)>是不同的,前者在调用时参数不会复制，而后者还会复制，shared_ptr还会再加1.
+
+* 由于bind产生的function会复制参数,所以不能以这样的function作为类的成员,否则会影响connection的析构,muduo使用的方法是保存 具有Tcpconnection参数的function,在handleread(无参数)中调用这个保存的function,并利用shared_from_this()将conn的share_ptr传入,既保证conn能顺利析构,又能保证调用过程中conn不被析构.shared_from_this()在相当于在函数调用前先在栈上临时开辟一个shared_ptr,使计数提前增1,由于这个临时变量不共享,没有人能减小这个计数,且这个计数至少维持到函数调用完毕,因此能保证函数调用期间的安全.

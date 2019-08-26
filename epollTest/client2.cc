@@ -19,7 +19,7 @@ pthread_cond_t  condition = PTHREAD_COND_INITIALIZER;
 
 int main(int argc, char** argv)
 {  
-	for (int i = 0; i < 200; i++)
+	for (int i = 0; i < 1; i++)
 	{
     	pthread_t pid;
     	pthread_create(&pid,NULL,&client_echo, NULL);
