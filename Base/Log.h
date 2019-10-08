@@ -129,6 +129,8 @@ namespace net
 						printf("Buf length: %d\n", buf->length());
 						debug++;
 					}
+					//flush()
+					usleep(1000);//模拟写入需要时间
 					printf("Total Bufs num : %d\n", debug);
 					
 					if (bufToWrite.size() > 2)
